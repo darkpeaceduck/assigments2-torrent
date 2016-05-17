@@ -32,6 +32,8 @@ public class Client implements Runnable {
             .newFixedThreadPool(DEFAULT_THREADS_NUM);
     private static final Path DEFAULT_DOWNLOAD_PREFIX = Paths.get(".");
 
+    private static final int DOWNLOAD_TRHEAD_SLEEP_TIMEOUT = 1000;
+
 
     private SharedComponents sharedComponents = new SharedComponents();
     private int port;
@@ -44,6 +46,7 @@ public class Client implements Runnable {
 
     private Thread seedControlThread;
     private Timer trackerUpdaterTimer;
+    private Thread downloadControlThread;
 
     private AtomicBoolean haveDownloadedAllFiles = new AtomicBoolean(false);
 
@@ -138,6 +141,10 @@ public class Client implements Runnable {
         }
     }
 
+    public List<FilesManager.FileInProcessInfo> getFilesFilesInProcessInfo() {
+        return sharedComponents.getFilesManager().getFileInProcessInfo();
+    }
+
     @Override
     public void run() {
         try {
@@ -152,7 +159,7 @@ public class Client implements Runnable {
 
         seedControlThread = new Thread(new SeedControlRunnable());
         trackerUpdaterTimer = new Timer();
-        Thread downloadControlThread = new Thread(new DownloadManagerRunnable());
+        downloadControlThread = new Thread(new DownloadManagerRunnable());
 
         seedControlThread.start();
 
@@ -236,6 +243,8 @@ public class Client implements Runnable {
             tasksExecutor.shutdownNow();
         }
 
+        downloadControlThread.interrupt();
+
         trackerUpdaterTimer.cancel();
         trackerUpdaterTimer.purge();
         sharedComponents.log.println("OK");
@@ -267,26 +276,43 @@ public class Client implements Runnable {
 
     private class DownloadManagerRunnable implements Runnable {
         private Map<Integer, FilesManager.ReadyToDownloadFilesEntry> readyToDownloadFiles;
-        private Map<Integer, Future<SourcesResponse>> pendingSeedsInfoTasks = new HashMap<>();
-        private Map<Integer, Map<InetSocketAddress, Future<StatResponse>>> pendingPartsInfoTasks = new HashMap<>();
-        private Map<Integer, Map<Integer, Future<?>>> pendingDownloadTasks = new HashMap<>();
-        private Map<Integer, Future<?>> pendingMergeTasks = new HashMap<>();
+        private Map<Integer, Future<SourcesResponse>> pendingSeedsInfoTasks;
+        private Map<Integer, Map<InetSocketAddress, Future<StatResponse>>> pendingPartsInfoTasks;
+        private Map<Integer, Map<Integer, Future<?>>> pendingDownloadTasks;
+        private Map<Integer, Future<?>> pendingMergeTasks;
 
         @Override
         public void run() {
-            prepareAndSubmitSeedsInfoTasks();
-            getSeedsInfoTasksAndSubmitPartsInfoTasks();
-            getPartsInfoTasksAndSubmitDownloadTasks();
-            downloadAllAndSubmitMergePartsTasks();
-            mergeAllAndSendComplitedToFilesManager();
-            sharedComponents.log.println("All Files have downloaded");
-            haveDownloadedAllFiles.set(true);
+            while (true) {
+                clean();
+                while (sharedComponents.getFilesManager().getReadyToDownloadFiles().isEmpty()) {
+                    try {
+                        Thread.sleep(DOWNLOAD_TRHEAD_SLEEP_TIMEOUT);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+                haveDownloadedAllFiles.set(false);
+                prepareAndSubmitSeedsInfoTasks();
+                getSeedsInfoTasksAndSubmitPartsInfoTasks();
+                getPartsInfoTasksAndSubmitDownloadTasks();
+                downloadAllAndSubmitMergePartsTasks();
+                mergeAllAndSendComplitedToFilesManager();
+                sharedComponents.log.println("All Files have downloaded");
+                haveDownloadedAllFiles.set(true);
+            }
+        }
+
+        private void clean() {
+            pendingSeedsInfoTasks = new HashMap<>();
+            pendingPartsInfoTasks = new HashMap<>();
+            pendingDownloadTasks = new HashMap<>();
+            pendingMergeTasks = new HashMap<>();
         }
 
         private void prepareAndSubmitSeedsInfoTasks() {
             readyToDownloadFiles = sharedComponents.getFilesManager()
                     .getReadyToDownloadFiles();
-            sharedComponents.getFilesManager().cleanReadyToDownloadFiles();
 
             readyToDownloadFiles.entrySet().forEach(entry -> {
                 int fileId = entry.getKey();
@@ -411,6 +437,8 @@ public class Client implements Runnable {
                     }
                     sharedComponents.getFilesManager().insertNewDistributedFile(fileId,
                             readyToDownloadFiles.get(fileId).getDownloadPath());
+
+                    sharedComponents.getFilesManager().cleanWithDownloadComplete(fileId);
                 } catch (Exception e) {
                     e.printStackTrace(sharedComponents.getLog());
                 }

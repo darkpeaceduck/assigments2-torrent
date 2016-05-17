@@ -19,7 +19,12 @@ public class SeedsProcessor {
 
     public synchronized void updateSeed(InetSocketAddress seedAddress, List<Integer> fileIds, long
             currentTimeMills) {
-        fileIds.forEach(id -> addSeed(id, new Seed(seedAddress, currentTimeMills)));
+        Seed seed = new Seed(seedAddress, currentTimeMills);
+        seeds.put(seed, fileIds);
+        currentUpdatedSeedsInfo.entrySet().forEach(entry -> {
+            entry.getValue().removeIf(e -> e.equals(seed));
+        });
+        fileIds.forEach(id -> addSeed(id, seed));
     }
 
     public synchronized void updateOnTick(long currentTimeMills) {

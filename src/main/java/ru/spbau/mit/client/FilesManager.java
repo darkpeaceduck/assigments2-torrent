@@ -134,8 +134,8 @@ public class FilesManager {
         return new HashMap<>(readyToDownloadFiles);
     }
 
-    public synchronized void cleanReadyToDownloadFiles() {
-        readyToDownloadFiles.clear();
+    public synchronized void cleanWithDownloadComplete(int id) {
+        readyToDownloadFiles.remove(id);
     }
 
     public synchronized void removeDistributedFileEntry(int fileId, int partId) {
@@ -146,8 +146,40 @@ public class FilesManager {
 
     public synchronized void removeDistributedFile(int fileId) {
         if (distributedFiles.containsKey(fileId)) {
-            distributedFiles.get(fileId).clear();
+            distributedFiles.remove(fileId);
         }
+    }
+
+    public synchronized  List<FileInProcessInfo> getFileInProcessInfo() {
+        List<FileInProcessInfo> fileInProcessInfoList = new ArrayList<>();
+        distributedFiles.entrySet().forEach(e -> {
+            int fileid = e.getKey();
+            if (readyToDownloadFiles.containsKey(fileid)) {
+                float sizeSummaryExist = e.getValue().entrySet().stream().map(x -> (float) x.getValue().getSize()
+                ).reduce(0f, (x, y) -> x + y);
+                ReadyToDownloadFilesEntry rentry = readyToDownloadFiles.get(fileid);
+                float sizeToDownload = (float) rentry.getSize();
+                fileInProcessInfoList.add(new FileInProcessInfo(rentry.getDownloadPath(), fileid,
+                        sizeSummaryExist / sizeToDownload * 100));
+            } else {
+                Set<Path> sizes = new HashSet<Path>();
+                e.getValue().entrySet().forEach(entry -> {
+                    if (!sizes.contains(entry.getValue().getPath())) {
+                        fileInProcessInfoList.add(
+                                new FileInProcessInfo(entry.getValue().getPath(), fileid));
+                        sizes.add(entry.getValue().getPath());
+                    }
+                });
+            }
+        });
+
+        readyToDownloadFiles.entrySet().forEach(e -> {
+            if (!distributedFiles.containsKey(e.getKey())) {
+                fileInProcessInfoList.add(new FileInProcessInfo(e.getValue().getDownloadPath(), e.getKey(),
+                        0));
+            }
+        });
+        return fileInProcessInfoList;
     }
 
     private void insertDistributedFileEntry(int id, int partId, DistributedFilesEntry file) {
@@ -194,6 +226,34 @@ public class FilesManager {
 
         public void setOffset(long offset) {
             this.offset = offset;
+        }
+    }
+
+    public static class FileInProcessInfo {
+        private String label;
+        private int id;
+        private float percentStatus;
+        FileInProcessInfo(Path path, int id) {
+            this.id = id;
+            label = path.toString();
+            percentStatus = 100f;
+        }
+        FileInProcessInfo(Path path, int id, float percentStatus) {
+            this.id = id;
+            label = path.toString();
+            this.percentStatus = percentStatus;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public float getPercentStatus() {
+            return percentStatus;
         }
     }
 
